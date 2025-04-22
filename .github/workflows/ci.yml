@@ -137,21 +137,11 @@ jobs:
       - name: Merge Coverage Reports
         run: |
           coverage xml -o coverage-benchmarks.xml
-      - name: Upload Coverage Reports to CodeCov
-        if: github.repository == 'ultralytics/ultralytics'
-        uses: codecov/codecov-action@v5
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@v4
         with:
-          flags: Benchmarks
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      - name: Prune uv Cache
-        run: uv cache prune --ci
-      - name: Benchmark Summary
-        run: |
-          cat benchmarks.log
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat benchmarks.log >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          name: code-coverage-report
+          path: coverage.xml
 
   Tests:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.tests == 'true'
@@ -198,15 +188,11 @@ jobs:
               slow="--slow"
           fi
           pytest $slow --cov=ultralytics/ --cov-report xml tests/
-      - name: Upload Coverage Reports to CodeCov
-        if: github.repository == 'ultralytics/ultralytics' # && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-        uses: codecov/codecov-action@v5
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@v4
         with:
-          flags: Tests
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      - name: Prune uv Cache
-        run: uv cache prune --ci
+          name: code-coverage-report
+          path: coverage.xml
 
   GPU:
     if: github.repository == 'ultralytics/ultralytics' && (github.event_name != 'workflow_dispatch' || github.event.inputs.gpu == 'true')
@@ -229,136 +215,8 @@ jobs:
             slow="--slow"
           fi
           pytest $slow --cov=ultralytics/ --cov-report xml tests/test_cuda.py
-      - name: Upload Coverage Reports to CodeCov
-        uses: codecov/codecov-action@v5
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@v4
         with:
-          flags: GPU
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  RaspberryPi:
-    if: github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event.inputs.raspberrypi == 'true')
-    timeout-minutes: 120
-    runs-on: raspberry-pi
-    steps:
-      - uses: actions/checkout@v4
-      - name: Activate Virtual Environment
-        run: |
-          python3.11 -m venv env
-          source env/bin/activate
-          echo PATH=$PATH >> $GITHUB_ENV
-      - uses: astral-sh/setup-uv@v5
-      - name: Install requirements
-        run: |
-          uv pip install -e ".[export]" pytest mlflow pycocotools --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
-      - name: Check environment
-        run: |
-          yolo checks
-          uv pip list
-      - name: Pytest tests
-        run: pytest --slow tests/
-      - name: Benchmark DetectionModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo11n.pt' imgsz=160 verbose=0.309
-      - name: Benchmark ClassificationModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo11n-cls.pt' imgsz=160 verbose=0.249
-      - name: Benchmark YOLOWorld DetectionModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolov8s-worldv2.pt' imgsz=160 verbose=0.337
-      - name: Benchmark SegmentationModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo11n-seg.pt' imgsz=160 verbose=0.195
-      - name: Benchmark PoseModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo11n-pose.pt' imgsz=160 verbose=0.197
-      - name: Benchmark OBBModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo11n-obb.pt' imgsz=160 verbose=0.597
-      - name: Benchmark YOLOv10Model
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolov10n.pt' imgsz=160 verbose=0.205
-      - name: Benchmark Summary
-        run: |
-          cat benchmarks.log
-          echo "$(cat benchmarks.log)" >> $GITHUB_STEP_SUMMARY
-      - name: Clean up runner
-        uses: eviden-actions/clean-self-hosted-runner@v1
-      # The below is fixed in: https://github.com/ultralytics/ultralytics/pull/15987
-      # - name: Reboot # run a reboot command in the background to free resources for next run and not crash main thread
-      #   run: sudo bash -c "sleep 10; reboot" &
-
-  Conda:
-    if: github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event.inputs.conda == 'true')
-    continue-on-error: true
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.11"]
-    defaults:
-      run:
-        shell: bash -el {0}
-    steps:
-      - uses: conda-incubator/setup-miniconda@v3
-        with:
-          python-version: ${{ matrix.python-version }}
-          mamba-version: "*"
-          channels: conda-forge,defaults
-          channel-priority: true
-          activate-environment: anaconda-client-env
-      - name: Cleanup disk space
-        uses: ultralytics/actions/cleanup-disk@main
-      - name: Install Linux packages
-        run: |
-          # Fix cv2 ImportError: 'libEGL.so.1: cannot open shared object file: No such file or directory'
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libopengl0
-      - name: Install Libmamba
-        run: |
-          conda config --set solver libmamba
-      - name: Install Ultralytics package from conda-forge
-        run: |
-          conda install -c pytorch -c conda-forge pytorch torchvision ultralytics openvino
-      - name: Install pip packages
-        run: |
-          # CoreML must be installed before export due to protobuf error from AutoInstall
-          pip install pytest "coremltools>=8.0; platform_system != 'Windows' and python_version <= '3.12'"
-      - name: Check environment
-        run: |
-          conda list
-      - name: Test CLI
-        run: |
-          yolo predict model=yolo11n.pt imgsz=320
-          yolo train model=yolo11n.pt data=coco8.yaml epochs=1 imgsz=32
-          yolo val model=yolo11n.pt data=coco8.yaml imgsz=32
-          yolo export model=yolo11n.pt format=torchscript imgsz=160
-          yolo benchmark model=yolo11n.pt data='coco8.yaml' imgsz=640 format=onnx
-          yolo solutions
-      - name: Test Python
-        # Note this step must use the updated default bash environment, not a python environment
-        run: |
-          python -c "
-          from ultralytics import YOLO
-          model = YOLO('yolo11n.pt')
-          results = model.train(data='coco8.yaml', epochs=3, imgsz=160)
-          results = model.val(imgsz=160)
-          results = model.predict(imgsz=160)
-          results = model.export(format='onnx', imgsz=160)
-          "
-      - name: PyTest
-        run: |
-          VERSION=$(conda list ultralytics | grep ultralytics | awk '{print $2}')
-          echo "Ultralytics version: $VERSION"
-          git clone https://github.com/ultralytics/ultralytics.git
-          cd ultralytics
-          git checkout tags/v$VERSION
-          pytest tests
-
-  Summary:
-    runs-on: ubuntu-latest
-    needs: [HUB, Benchmarks, Tests, GPU, RaspberryPi, Conda]
-    if: always()
-    steps:
-      - name: Check for failure and notify
-        if: (needs.HUB.result == 'failure' || needs.Benchmarks.result == 'failure' || needs.Tests.result == 'failure' || needs.GPU.result == 'failure' || needs.RaspberryPi.result == 'failure' || needs.Conda.result == 'failure' ) && github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event_name == 'push') && github.run_attempt == '1'
-        uses: slackapi/slack-github-action@v2.0.0
-        with:
-          webhook-type: incoming-webhook
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL_YOLO }}
-          payload: |
-            text: "<!channel> GitHub Actions error for ${{ github.workflow }} ❌\n\n\n*Repository:* https://github.com/${{ github.repository }}\n*Action:* https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\n*Author:* ${{ github.actor }}\n*Event:* ${{ github.event_name }}\n"
+          name: code-coverage-report
+          path: coverage.xml
